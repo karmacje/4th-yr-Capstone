@@ -5,83 +5,121 @@ import { Plus, Search, MapPin, Activity, Battery, Settings } from 'lucide-react-
 import { Colors } from '@/constants/Colors';
 import { getAmmoniaLevelColor, getBatteryLevelColor } from '@/utils/helpers';
 import { router } from 'expo-router';
+import { supabase } from '@/lib/supabase';
 
-// Mock data
-const mockPigpens = [
-  {
-    id: '1',
-    name: 'Pigpen A',
-    location: 'North Section',
-    sensorId: 'sensor-001',
-    ammonia: 8,
-    category: 'Low',
-    battery: 85,
-    status: 'online',
-    lastReading: '2 min ago'
-  },
-  {
-    id: '2',
-    name: 'Pigpen B',
-    location: 'East Section',
-    sensorId: 'sensor-002',
-    ammonia: 22,
-    category: 'Medium',
-    battery: 45,
-    status: 'online',
-    lastReading: '1 min ago'
-  },
-  {
-    id: '3',
-    name: 'Pigpen C',
-    location: 'South Section',
-    sensorId: 'sensor-003',
-    ammonia: 35,
-    category: 'High',
-    battery: 20,
-    status: 'online',
-    lastReading: '3 min ago'
-  },
-  {
-    id: '4',
-    name: 'Pigpen D',
-    location: 'West Section',
-    sensorId: 'sensor-004',
-    ammonia: 55,
-    category: 'Critical',
-    battery: 75,
-    status: 'error',
-    lastReading: '5 min ago'
-  },
-];
+interface PigpenData {
+  pigpen_id: string;
+  name: string;
+  location_description: string;
+  sensorId?: string;
+  ammonia: number;
+  category: string;
+  battery: number;
+  status: string;
+  lastReading: string;
+}
 
 export default function PigpensScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [pigpens, setPigpens] = useState<PigpenData[]>([]);
+  const [loading, setLoading] = useState(true);
   const [newPigpen, setNewPigpen] = useState({
     name: '',
-    location: '',
+    location_description: '',
     sensorId: '',
   });
 
-  const filteredPigpens = mockPigpens.filter(pigpen =>
+  useEffect(() => {
+    fetchPigpens();
+  }, []);
+
+  const fetchPigpens = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('pigpens')
+        .select(`
+          pigpen_id,
+          name,
+          location_description,
+          sensor_nodes (
+            sensor_id,
+            node_label,
+            status,
+            battery_level,
+            sensor_readings (
+              value_ppm,
+              category,
+              timestamp
+            )
+          )
+        `)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      const formattedPigpens: PigpenData[] = data?.map(pigpen => {
+        const sensor = pigpen.sensor_nodes?.[0];
+        const latestReading = sensor?.sensor_readings?.[0];
+        
+        return {
+          pigpen_id: pigpen.pigpen_id,
+          name: pigpen.name,
+          location_description: pigpen.location_description,
+          sensorId: sensor?.node_label || 'No sensor',
+          ammonia: latestReading?.value_ppm || 0,
+          category: latestReading?.category || 'Low',
+          battery: sensor?.battery_level || 0,
+          status: sensor?.status || 'offline',
+          lastReading: latestReading?.timestamp ? formatTime(latestReading.timestamp) : 'No data'
+        };
+      }) || [];
+
+      setPigpens(formattedPigpens);
+    } catch (error) {
+      console.error('Error fetching pigpens:', error);
+      setPigpens([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredPigpens = pigpens.filter(pigpen =>
     pigpen.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    pigpen.location.toLowerCase().includes(searchQuery.toLowerCase())
+    pigpen.location_description.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const handleAddPigpen = () => {
-    if (!newPigpen.name || !newPigpen.location) {
+    if (!newPigpen.name || !newPigpen.location_description) {
       Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
 
-    // Here you would add the pigpen to your database
-    Alert.alert('Success', 'Pigpen added successfully!');
-    setShowAddModal(false);
-    setNewPigpen({ name: '', location: '', sensorId: '' });
+    try {
+      const { error } = await supabase
+        .from('pigpens')
+        .insert([
+          {
+            name: newPigpen.name,
+            location_description: newPigpen.location_description
+          }
+        ]);
+
+      if (error) throw error;
+
+      Alert.alert('Success', 'Pigpen added successfully!');
+      setShowAddModal(false);
+      setNewPigpen({ name: '', location_description: '', sensorId: '' });
+      fetchPigpens(); // Refresh the list
+    } catch (error) {
+      console.error('Error adding pigpen:', error);
+      Alert.alert('Error', 'Failed to add pigpen');
+    }
   };
 
   const handlePigpenPress = (pigpen: any) => {
-    router.push(`/pigpen-details/${pigpen.id}`);
+    router.push(`/pigpen-details/${pigpen.pigpen_id}`);
   };
 
   return (
@@ -110,9 +148,23 @@ export default function PigpensScreen() {
 
       {/* Pigpen List */}
       <ScrollView style={styles.scrollView}>
-        {filteredPigpens.map((pigpen) => (
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>Loading pigpens...</Text>
+          </View>
+        ) : filteredPigpens.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>
+              {searchQuery ? 'No pigpens found' : 'No pigpens available'}
+            </Text>
+            <Text style={styles.emptyStateSubtext}>
+              {searchQuery ? 'Try adjusting your search' : 'Add your first pigpen to get started'}
+            </Text>
+          </View>
+        ) : (
+          filteredPigpens.map((pigpen) => (
           <TouchableOpacity
-            key={pigpen.id}
+            key={pigpen.pigpen_id}
             style={styles.pigpenCard}
             onPress={() => handlePigpenPress(pigpen)}
           >
@@ -121,7 +173,7 @@ export default function PigpensScreen() {
                 <Text style={styles.pigpenName}>{pigpen.name}</Text>
                 <View style={styles.locationContainer}>
                   <MapPin size={14} color={Colors.textSecondary} />
-                  <Text style={styles.location}>{pigpen.location}</Text>
+                  <Text style={styles.location}>{pigpen.location_description}</Text>
                 </View>
               </View>
               <TouchableOpacity style={styles.settingsButton}>
@@ -178,15 +230,7 @@ export default function PigpensScreen() {
 
             <Text style={styles.lastReading}>Last reading: {pigpen.lastReading}</Text>
           </TouchableOpacity>
-        ))}
-
-        {filteredPigpens.length === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No pigpens found</Text>
-            <Text style={styles.emptyStateSubtext}>
-              {searchQuery ? 'Try adjusting your search' : 'Add your first pigpen to get started'}
-            </Text>
-          </View>
+          ))
         )}
       </ScrollView>
 
@@ -223,8 +267,8 @@ export default function PigpensScreen() {
               <TextInput
                 style={styles.textInput}
                 placeholder="e.g., North Section"
-                value={newPigpen.location}
-                onChangeText={(text) => setNewPigpen({ ...newPigpen, location: text })}
+                value={newPigpen.location_description}
+                onChangeText={(text) => setNewPigpen({ ...newPigpen, location_description: text })}
               />
             </View>
 
@@ -421,6 +465,16 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   emptyStateSubtext: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  loadingText: {
     fontSize: 14,
     color: Colors.textSecondary,
     textAlign: 'center',

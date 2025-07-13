@@ -4,29 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LineChart, BarChart } from 'react-native-chart-kit';
 import { Calendar, TrendingUp, BarChart3, Activity } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
+import { supabase } from '@/lib/supabase';
 
 const screenWidth = Dimensions.get('window').width;
-
-// Mock data for charts
-const mockLineData = {
-  labels: ['6AM', '9AM', '12PM', '3PM', '6PM', '9PM'],
-  datasets: [
-    {
-      data: [8, 12, 15, 22, 18, 14],
-      color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-      strokeWidth: 2,
-    },
-  ],
-};
-
-const mockBarData = {
-  labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-  datasets: [
-    {
-      data: [18, 25, 22, 30, 28, 24, 20],
-    },
-  ],
-};
 
 const chartConfig = {
   backgroundColor: Colors.white,
@@ -63,12 +43,149 @@ export default function AnalyticsScreen() {
   const [selectedTimeRange, setSelectedTimeRange] = useState('24h');
   const [selectedPigpen, setSelectedPigpen] = useState('all');
   const [chartType, setChartType] = useState<'line' | 'bar'>('line');
+  const [chartData, setChartData] = useState<any>(null);
+  const [stats, setStats] = useState({
+    average: 0,
+    minimum: 0,
+    maximum: 0,
+    criticalEvents: 0
+  });
+  const [loading, setLoading] = useState(true);
 
-  const stats = [
-    { label: 'Average', value: '18.5 ppm', color: Colors.primary },
-    { label: 'Minimum', value: '8 ppm', color: Colors.safe },
-    { label: 'Maximum', value: '35 ppm', color: Colors.high },
-    { label: 'Critical Events', value: '3', color: Colors.critical },
+  useEffect(() => {
+    fetchAnalyticsData();
+  }, [selectedTimeRange, selectedPigpen]);
+
+  const fetchAnalyticsData = async () => {
+    try {
+      setLoading(true);
+      
+      // Calculate date range based on selection
+      const now = new Date();
+      let startDate = new Date();
+      
+      switch (selectedTimeRange) {
+        case '24h':
+          startDate.setHours(now.getHours() - 24);
+          break;
+        case '7d':
+          startDate.setDate(now.getDate() - 7);
+          break;
+        case '1m':
+          startDate.setMonth(now.getMonth() - 1);
+          break;
+      }
+
+      // Build query
+      let query = supabase
+        .from('sensor_readings')
+        .select(`
+          value_ppm,
+          category,
+          timestamp,
+          sensor_nodes (
+            pigpens (
+              pigpen_id,
+              name
+            )
+          )
+        `)
+        .gte('timestamp', startDate.toISOString())
+        .order('timestamp', { ascending: true });
+
+      // Filter by pigpen if not 'all'
+      if (selectedPigpen !== 'all') {
+        query = query.eq('sensor_nodes.pigpens.pigpen_id', selectedPigpen);
+      }
+
+      const { data, error } = await query;
+      
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        // Calculate statistics
+        const values = data.map(reading => reading.value_ppm);
+        const average = values.reduce((sum, val) => sum + val, 0) / values.length;
+        const minimum = Math.min(...values);
+        const maximum = Math.max(...values);
+        const criticalEvents = data.filter(reading => reading.category === 'Critical').length;
+
+        setStats({
+          average: Math.round(average * 10) / 10,
+          minimum,
+          maximum,
+          criticalEvents
+        });
+
+        // Prepare chart data
+        const chartLabels = [];
+        const chartValues = [];
+        
+        if (selectedTimeRange === '24h') {
+          // Group by hour
+          for (let i = 0; i < 6; i++) {
+            const hour = new Date(now.getTime() - (5 - i) * 4 * 60 * 60 * 1000);
+            chartLabels.push(hour.getHours() + ':00');
+            
+            const hourData = data.filter(reading => {
+              const readingHour = new Date(reading.timestamp).getHours();
+              return Math.abs(readingHour - hour.getHours()) < 2;
+            });
+            
+            const avgValue = hourData.length > 0 
+              ? hourData.reduce((sum, r) => sum + r.value_ppm, 0) / hourData.length 
+              : 0;
+            chartValues.push(Math.round(avgValue));
+          }
+        } else {
+          // Group by day
+          for (let i = 6; i >= 0; i--) {
+            const day = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+            chartLabels.push(day.toLocaleDateString('en-US', { weekday: 'short' }));
+            
+            const dayData = data.filter(reading => {
+              const readingDate = new Date(reading.timestamp).toDateString();
+              return readingDate === day.toDateString();
+            });
+            
+            const avgValue = dayData.length > 0 
+              ? dayData.reduce((sum, r) => sum + r.value_ppm, 0) / dayData.length 
+              : 0;
+            chartValues.push(Math.round(avgValue));
+          }
+        }
+
+        setChartData({
+          labels: chartLabels,
+          datasets: [
+            {
+              data: chartValues,
+              color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
+              strokeWidth: 2,
+            },
+          ],
+        });
+      } else {
+        // No data available
+        setStats({ average: 0, minimum: 0, maximum: 0, criticalEvents: 0 });
+        setChartData({
+          labels: ['No Data'],
+          datasets: [{ data: [0] }],
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching analytics data:', error);
+      setStats({ average: 0, minimum: 0, maximum: 0, criticalEvents: 0 });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const statsDisplay = [
+    { label: 'Average', value: `${stats.average} ppm`, color: Colors.primary },
+    { label: 'Minimum', value: `${stats.minimum} ppm`, color: Colors.safe },
+    { label: 'Maximum', value: `${stats.maximum} ppm`, color: Colors.high },
+    { label: 'Critical Events', value: `${stats.criticalEvents}`, color: Colors.critical },
   ];
 
   return (
@@ -147,14 +264,18 @@ export default function AnalyticsScreen() {
         {/* Statistics Cards */}
         <View style={styles.statsSection}>
           <Text style={styles.sectionTitle}>Statistics</Text>
-          <View style={styles.statsGrid}>
-            {stats.map((stat, index) => (
+          {loading ? (
+            <Text style={styles.loadingText}>Loading statistics...</Text>
+          ) : (
+            <View style={styles.statsGrid}>
+            {statsDisplay.map((stat, index) => (
               <View key={index} style={styles.statCard}>
                 <Text style={styles.statLabel}>{stat.label}</Text>
                 <Text style={[styles.statValue, { color: stat.color }]}>{stat.value}</Text>
               </View>
             ))}
-          </View>
+            </View>
+          )}
         </View>
 
         {/* Charts */}
@@ -168,9 +289,14 @@ export default function AnalyticsScreen() {
           </View>
 
           <View style={styles.chartContainer}>
-            {chartType === 'line' ? (
+            {loading ? (
+              <View style={styles.chartLoading}>
+                <Text style={styles.loadingText}>Loading chart data...</Text>
+              </View>
+            ) : chartData ? (
+              chartType === 'line' ? (
               <LineChart
-                data={mockLineData}
+                data={chartData}
                 width={screenWidth - 40}
                 height={220}
                 chartConfig={chartConfig}
@@ -179,12 +305,17 @@ export default function AnalyticsScreen() {
               />
             ) : (
               <BarChart
-                data={mockBarData}
+                data={chartData}
                 width={screenWidth - 40}
                 height={220}
                 chartConfig={chartConfig}
                 style={styles.chart}
               />
+            )
+            ) : (
+              <View style={styles.chartLoading}>
+                <Text style={styles.loadingText}>No data available</Text>
+              </View>
             )}
           </View>
         </View>
@@ -350,6 +481,17 @@ const styles = StyleSheet.create({
   legendText: {
     fontSize: 14,
     color: Colors.textSecondary,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  chartLoading: {
+    height: 220,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   chartContainer: {
     backgroundColor: Colors.white,

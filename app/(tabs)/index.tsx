@@ -4,47 +4,186 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, Activity, Battery, Calendar, AlertTriangle } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { getAmmoniaLevelColor, getBatteryLevelColor, formatTime } from '@/utils/helpers';
+import { supabase } from '@/lib/supabase';
 
-// Mock data - replace with real Supabase data
-const mockSensorData = [
-  { id: '1', name: 'Pigpen A', ammonia: 8, category: 'Low', battery: 85, status: 'online' },
-  { id: '2', name: 'Pigpen B', ammonia: 22, category: 'Medium', battery: 45, status: 'online' },
-  { id: '3', name: 'Pigpen C', ammonia: 35, category: 'High', battery: 20, status: 'online' },
-  { id: '4', name: 'Pigpen D', ammonia: 55, category: 'Critical', battery: 75, status: 'error' },
-];
+interface SensorData {
+  pigpen_id: string;
+  name: string;
+  ammonia: number;
+  category: string;
+  battery: number;
+  status: string;
+  lastReading: string;
+}
 
-const mockAlerts = [
-  { id: '1', message: 'Critical ammonia level in Pigpen D', time: '2 min ago', severity: 'critical' },
-  { id: '2', message: 'Low battery in Pigpen C sensor', time: '15 min ago', severity: 'warning' },
-];
+interface AlertData {
+  alert_id: string;
+  message: string;
+  time: string;
+  severity: string;
+}
 
-const mockSchedules = [
-  { id: '1', title: 'Clean Pigpen A', time: '09:00 AM', status: 'due' },
-  { id: '2', title: 'Feed Supplement', time: '02:00 PM', status: 'completed' },
-];
+interface ScheduleData {
+  schedule_id: string;
+  title: string;
+  time: string;
+  status: string;
+}
 
 export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [sensorData, setSensorData] = useState<SensorData[]>([]);
+  const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleData[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
     }, 60000); // Update every minute
 
+    fetchDashboardData();
+
     return () => clearInterval(timer);
   }, []);
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    // Simulate API call
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 1500);
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      await Promise.all([
+        fetchSensorData(),
+        fetchAlerts(),
+        fetchSchedules()
+      ]);
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const criticalCount = mockSensorData.filter(sensor => sensor.category === 'Critical').length;
-  const lowBatteryCount = mockSensorData.filter(sensor => sensor.battery < 30).length;
+  const fetchSensorData = async () => {
+    try {
+      const { data: pigpens, error: pigpensError } = await supabase
+        .from('pigpens')
+        .select(`
+          pigpen_id,
+          name,
+          sensor_nodes (
+            sensor_id,
+            status,
+            battery_level,
+            sensor_readings (
+              value_ppm,
+              category,
+              timestamp
+            )
+          )
+        `);
+
+      if (pigpensError) throw pigpensError;
+
+      const formattedData: SensorData[] = pigpens?.map(pigpen => {
+        const sensor = pigpen.sensor_nodes?.[0];
+        const latestReading = sensor?.sensor_readings?.[0];
+        
+        return {
+          pigpen_id: pigpen.pigpen_id,
+          name: pigpen.name,
+          ammonia: latestReading?.value_ppm || 0,
+          category: latestReading?.category || 'Low',
+          battery: sensor?.battery_level || 0,
+          status: sensor?.status || 'offline',
+          lastReading: latestReading?.timestamp ? formatTime(latestReading.timestamp) : 'No data'
+        };
+      }) || [];
+
+      setSensorData(formattedData);
+    } catch (error) {
+      console.error('Error fetching sensor data:', error);
+      setSensorData([]);
+    }
+  };
+
+  const fetchAlerts = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('alerts')
+        .select(`
+          alert_id,
+          created_at,
+          sensor_readings (
+            value_ppm,
+            category,
+            sensor_nodes (
+              pigpens (
+                name
+              )
+            )
+          )
+        `)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+
+      const formattedAlerts: AlertData[] = data?.map(alert => {
+        const reading = alert.sensor_readings;
+        const pigpenName = reading?.sensor_nodes?.pigpens?.name || 'Unknown';
+        const category = reading?.category || 'Unknown';
+        const ppm = reading?.value_ppm || 0;
+        
+        return {
+          alert_id: alert.alert_id,
+          message: `${category} ammonia level (${ppm} ppm) in ${pigpenName}`,
+          time: formatTime(alert.created_at),
+          severity: category === 'Critical' ? 'critical' : 'warning'
+        };
+      }) || [];
+
+      setAlerts(formattedAlerts);
+    } catch (error) {
+      console.error('Error fetching alerts:', error);
+      setAlerts([]);
+    }
+  };
+
+  const fetchSchedules = async () => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      
+      const { data, error } = await supabase
+        .from('maintenance_schedules')
+        .select('schedule_id, title, due_date, completed')
+        .gte('due_date', today)
+        .order('due_date', { ascending: true })
+        .limit(5);
+
+      if (error) throw error;
+
+      const formattedSchedules: ScheduleData[] = data?.map(schedule => ({
+        schedule_id: schedule.schedule_id,
+        title: schedule.title,
+        time: formatTime(schedule.due_date),
+        status: schedule.completed ? 'completed' : 'due'
+      })) || [];
+
+      setSchedules(formattedSchedules);
+    } catch (error) {
+      console.error('Error fetching schedules:', error);
+      setSchedules([]);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchDashboardData();
+    setRefreshing(false);
+  };
+
+  const criticalCount = sensorData.filter(sensor => sensor.category === 'Critical').length;
+  const lowBatteryCount = sensorData.filter(sensor => sensor.battery < 30).length;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -62,7 +201,7 @@ export default function DashboardScreen() {
           </View>
           <TouchableOpacity style={styles.notificationButton}>
             <Bell size={24} color={Colors.text} />
-            {mockAlerts.length > 0 && <View style={styles.notificationBadge} />}
+            {alerts.length > 0 && <View style={styles.notificationBadge} />}
           </TouchableOpacity>
         </View>
 
@@ -75,7 +214,7 @@ export default function DashboardScreen() {
           </View>
           <View style={[styles.statusCard, { backgroundColor: Colors.primary }]}>
             <Activity size={24} color={Colors.white} />
-            <Text style={styles.statusNumber}>{mockSensorData.filter(s => s.status === 'online').length}</Text>
+            <Text style={styles.statusNumber}>{sensorData.filter(s => s.status === 'online').length}</Text>
             <Text style={styles.statusLabel}>Active Sensors</Text>
           </View>
           <View style={[styles.statusCard, { backgroundColor: lowBatteryCount > 0 ? Colors.warning : Colors.safe }]}>
@@ -86,11 +225,11 @@ export default function DashboardScreen() {
         </View>
 
         {/* Recent Alerts */}
-        {mockAlerts.length > 0 && (
+        {alerts.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent Alerts</Text>
-            {mockAlerts.map((alert) => (
-              <View key={alert.id} style={styles.alertCard}>
+            {alerts.map((alert) => (
+              <View key={alert.alert_id} style={styles.alertCard}>
                 <View style={[styles.alertIndicator, { 
                   backgroundColor: alert.severity === 'critical' ? Colors.critical : Colors.warning 
                 }]} />
@@ -106,8 +245,13 @@ export default function DashboardScreen() {
         {/* Sensor Overview */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Sensor Overview</Text>
-          {mockSensorData.map((sensor) => (
-            <View key={sensor.id} style={styles.sensorCard}>
+          {loading ? (
+            <Text style={styles.loadingText}>Loading sensor data...</Text>
+          ) : sensorData.length === 0 ? (
+            <Text style={styles.emptyText}>No sensor data available</Text>
+          ) : (
+            sensorData.map((sensor) => (
+            <View key={sensor.pigpen_id} style={styles.sensorCard}>
               <View style={styles.sensorHeader}>
                 <Text style={styles.sensorName}>{sensor.name}</Text>
                 <View style={[styles.statusBadge, { 
@@ -147,7 +291,7 @@ export default function DashboardScreen() {
                 </View>
               </View>
             </View>
-          ))}
+          )))}
         </View>
 
         {/* Today's Schedule */}
@@ -156,8 +300,11 @@ export default function DashboardScreen() {
             <Text style={styles.sectionTitle}>Today's Schedule</Text>
             <Calendar size={20} color={Colors.primary} />
           </View>
-          {mockSchedules.map((schedule) => (
-            <View key={schedule.id} style={styles.scheduleCard}>
+          {schedules.length === 0 ? (
+            <Text style={styles.emptyText}>No scheduled tasks for today</Text>
+          ) : (
+            schedules.map((schedule) => (
+            <View key={schedule.schedule_id} style={styles.scheduleCard}>
               <View style={styles.scheduleTime}>
                 <Text style={styles.scheduleTimeText}>{schedule.time}</Text>
               </View>
@@ -172,7 +319,7 @@ export default function DashboardScreen() {
                 </View>
               </View>
             </View>
-          ))}
+          )))}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -397,5 +544,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     color: Colors.white,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    paddingVertical: 20,
   },
 });

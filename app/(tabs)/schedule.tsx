@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
-import { Plus, Clock, MapPin, CheckCircle, Circle, Edit, Trash2 } from 'lucide-react-native';
+import { Plus, Clock, MapPin, CircleCheck as CheckCircle, Circle, CreditCard as Edit, Trash2 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { supabase } from '@/lib/supabase';
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LineChart, BarChart } from 'react-native-chart-kit';
@@ -104,7 +105,7 @@ export default function AnalyticsScreen() {
 
       if (data && data.length > 0) {
         // Calculate statistics
-        const values = data.map(reading => reading.value_ppm);
+        const values = data.map(reading => Number(reading.value_ppm));
         const average = values.reduce((sum, val) => sum + val, 0) / values.length;
         const minimum = Math.min(...values);
         const maximum = Math.max(...values);
@@ -133,7 +134,7 @@ export default function AnalyticsScreen() {
             });
             
             const avgValue = hourData.length > 0 
-              ? hourData.reduce((sum, r) => sum + r.value_ppm, 0) / hourData.length 
+              ? hourData.reduce((sum, r) => sum + Number(r.value_ppm), 0) / hourData.length 
               : 0;
             chartValues.push(Math.round(avgValue));
           }
@@ -149,7 +150,7 @@ export default function AnalyticsScreen() {
             });
             
             const avgValue = dayData.length > 0 
-              ? dayData.reduce((sum, r) => sum + r.value_ppm, 0) / dayData.length 
+              ? dayData.reduce((sum, r) => sum + Number(r.value_ppm), 0) / dayData.length 
               : 0;
             chartValues.push(Math.round(avgValue));
           }

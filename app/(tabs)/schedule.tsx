@@ -1,39 +1,117 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
 import { Plus, Clock, MapPin, CheckCircle, Circle, Edit, Trash2 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
+import { supabase } from '@/lib/supabase';
 
-// Mock data
-const mockSchedules = {
-  '2025-01-15': [
-    { id: '1', title: 'Clean Pigpen A', time: '09:00', location: 'North Section', completed: false, recurring: false },
-    { id: '2', title: 'Feed Supplement', time: '14:00', location: 'All Sections', completed: true, recurring: true },
-  ],
-  '2025-01-16': [
-    { id: '3', title: 'Check Sensors', time: '08:00', location: 'All Sections', completed: false, recurring: true },
-    { id: '4', title: 'Maintenance Round', time: '16:00', location: 'West Section', completed: false, recurring: false },
-  ],
-  '2025-01-17': [
-    { id: '5', title: 'Water System Check', time: '10:00', location: 'South Section', completed: false, recurring: false },
-  ],
-};
+interface ScheduleTask {
+  schedule_id: string;
+  title: string;
+  description?: string;
+  due_date: string;
+  is_recurring: boolean;
+  completed: boolean;
+  pigpen_name?: string;
+}
 
 export default function ScheduleScreen() {
   const [selectedDate, setSelectedDate] = useState('2025-01-15');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [schedules, setSchedules] = useState<{ [key: string]: ScheduleTask[] }>({});
+  const [loading, setLoading] = useState(true);
   const [newTask, setNewTask] = useState({
     title: '',
+    description: '',
     time: '',
-    location: '',
-    recurring: false,
+    pigpen_id: '',
+    is_recurring: false,
   });
+  const [pigpens, setPigpens] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetchSchedules();
+    fetchPigpens();
+  }, []);
+
+  const fetchPigpens = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('pigpens')
+        .select('pigpen_id, name')
+        .order('name');
+
+      if (error) throw error;
+      setPigpens(data || []);
+    } catch (error) {
+      console.error('Error fetching pigpens:', error);
+    }
+  };
+
+  const fetchSchedules = async () => {
+    try {
+      setLoading(true);
+      
+      // Get schedules for the current month
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      const endOfMonth = new Date();
+      endOfMonth.setMonth(endOfMonth.getMonth() + 1);
+      endOfMonth.setDate(0);
+
+      const { data, error } = await supabase
+        .from('maintenance_schedules')
+        .select(`
+          schedule_id,
+          title,
+          description,
+          due_date,
+          is_recurring,
+          completed,
+          pigpens (
+            name
+          )
+        `)
+        .gte('due_date', startOfMonth.toISOString())
+        .lte('due_date', endOfMonth.toISOString())
+        .order('due_date');
+
+      if (error) throw error;
+
+      // Group schedules by date
+      const groupedSchedules: { [key: string]: ScheduleTask[] } = {};
+      
+      data?.forEach(schedule => {
+        const dateKey = schedule.due_date.split('T')[0];
+        if (!groupedSchedules[dateKey]) {
+          groupedSchedules[dateKey] = [];
+        }
+        
+        groupedSchedules[dateKey].push({
+          schedule_id: schedule.schedule_id,
+          title: schedule.title,
+          description: schedule.description,
+          due_date: schedule.due_date,
+          is_recurring: schedule.is_recurring,
+          completed: schedule.completed,
+          pigpen_name: schedule.pigpens?.name
+        });
+      });
+
+      setSchedules(groupedSchedules);
+    } catch (error) {
+      console.error('Error fetching schedules:', error);
+      setSchedules({});
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const getMarkedDates = () => {
     const marked: any = {};
-    Object.keys(mockSchedules).forEach(date => {
-      const tasks = mockSchedules[date as keyof typeof mockSchedules];
+    Object.keys(schedules).forEach(date => {
+      const tasks = schedules[date];
       const completedCount = tasks.filter(task => task.completed).length;
       const totalCount = tasks.length;
       
@@ -47,24 +125,61 @@ export default function ScheduleScreen() {
     return marked;
   };
 
-  const handleAddTask = () => {
-    if (!newTask.title || !newTask.time) {
-      Alert.alert('Error', 'Please fill in title and time');
+  const handleAddTask = async () => {
+    if (!newTask.title || !newTask.time || !newTask.pigpen_id) {
+      Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
 
-    // Here you would add the task to your database
-    Alert.alert('Success', 'Task added successfully!');
-    setShowAddModal(false);
-    setNewTask({ title: '', time: '', location: '', recurring: false });
+    try {
+      // Combine selected date with time
+      const dueDateTime = new Date(`${selectedDate}T${newTask.time}:00`);
+      
+      const { error } = await supabase
+        .from('maintenance_schedules')
+        .insert([
+          {
+            pigpen_id: newTask.pigpen_id,
+            title: newTask.title,
+            description: newTask.description || null,
+            due_date: dueDateTime.toISOString(),
+            is_recurring: newTask.is_recurring
+          }
+        ]);
+
+      if (error) throw error;
+
+      Alert.alert('Success', 'Task added successfully!');
+      setShowAddModal(false);
+      setNewTask({ title: '', description: '', time: '', pigpen_id: '', is_recurring: false });
+      fetchSchedules(); // Refresh the schedules
+    } catch (error) {
+      console.error('Error adding task:', error);
+      Alert.alert('Error', 'Failed to add task');
+    }
   };
 
-  const toggleTaskCompletion = (taskId: string) => {
-    // Here you would update the task completion status in your database
-    Alert.alert('Success', 'Task status updated!');
+  const toggleTaskCompletion = async (taskId: string) => {
+    try {
+      const task = Object.values(schedules).flat().find(t => t.schedule_id === taskId);
+      if (!task) return;
+
+      const { error } = await supabase
+        .from('maintenance_schedules')
+        .update({ completed: !task.completed })
+        .eq('schedule_id', taskId);
+
+      if (error) throw error;
+
+      Alert.alert('Success', 'Task status updated!');
+      fetchSchedules(); // Refresh the schedules
+    } catch (error) {
+      console.error('Error updating task:', error);
+      Alert.alert('Error', 'Failed to update task');
+    }
   };
 
-  const selectedTasks = mockSchedules[selectedDate as keyof typeof mockSchedules] || [];
+  const selectedTasks = schedules[selectedDate] || [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -120,17 +235,21 @@ export default function ScheduleScreen() {
             <Text style={styles.taskCount}>{selectedTasks.length} tasks</Text>
           </View>
 
-          {selectedTasks.length === 0 ? (
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              <Text style={styles.loadingText}>Loading tasks...</Text>
+            </View>
+          ) : selectedTasks.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateText}>No tasks scheduled</Text>
               <Text style={styles.emptyStateSubtext}>Tap + to add a new task</Text>
             </View>
           ) : (
             selectedTasks.map((task) => (
-              <View key={task.id} style={styles.taskCard}>
+              <View key={task.schedule_id} style={styles.taskCard}>
                 <TouchableOpacity
                   style={styles.taskCheckbox}
-                  onPress={() => toggleTaskCompletion(task.id)}
+                  onPress={() => toggleTaskCompletion(task.schedule_id)}
                 >
                   {task.completed ? (
                     <CheckCircle size={24} color={Colors.safe} />
@@ -147,18 +266,23 @@ export default function ScheduleScreen() {
                   <View style={styles.taskDetails}>
                     <View style={styles.taskDetail}>
                       <Clock size={14} color={Colors.textSecondary} />
-                      <Text style={styles.taskDetailText}>{task.time}</Text>
+                      <Text style={styles.taskDetailText}>
+                        {new Date(task.due_date).toLocaleTimeString('en-US', { 
+                          hour: '2-digit', 
+                          minute: '2-digit' 
+                        })}
+                      </Text>
                     </View>
                     
-                    {task.location && (
+                    {task.pigpen_name && (
                       <View style={styles.taskDetail}>
                         <MapPin size={14} color={Colors.textSecondary} />
-                        <Text style={styles.taskDetailText}>{task.location}</Text>
+                        <Text style={styles.taskDetailText}>{task.pigpen_name}</Text>
                       </View>
                     )}
                   </View>
 
-                  {task.recurring && (
+                  {task.is_recurring && (
                     <View style={styles.recurringBadge}>
                       <Text style={styles.recurringText}>Recurring</Text>
                     </View>
@@ -220,6 +344,17 @@ export default function ScheduleScreen() {
             </View>
 
             <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Description</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Optional description"
+                value={newTask.description}
+                onChangeText={(text) => setNewTask({ ...newTask, description: text })}
+                multiline
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Time *</Text>
               <TextInput
                 style={styles.textInput}
@@ -230,23 +365,36 @@ export default function ScheduleScreen() {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Location</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="e.g., North Section"
-                value={newTask.location}
-                onChangeText={(text) => setNewTask({ ...newTask, location: text })}
-              />
+              <Text style={styles.inputLabel}>Pigpen *</Text>
+              <View style={styles.pickerContainer}>
+                {pigpens.map((pigpen) => (
+                  <TouchableOpacity
+                    key={pigpen.pigpen_id}
+                    style={[
+                      styles.pickerOption,
+                      newTask.pigpen_id === pigpen.pigpen_id && styles.pickerOptionSelected
+                    ]}
+                    onPress={() => setNewTask({ ...newTask, pigpen_id: pigpen.pigpen_id })}
+                  >
+                    <Text style={[
+                      styles.pickerOptionText,
+                      newTask.pigpen_id === pigpen.pigpen_id && styles.pickerOptionTextSelected
+                    ]}>
+                      {pigpen.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
 
             <TouchableOpacity
               style={styles.recurringToggle}
-              onPress={() => setNewTask({ ...newTask, recurring: !newTask.recurring })}
+              onPress={() => setNewTask({ ...newTask, is_recurring: !newTask.is_recurring })}
             >
               <View style={styles.recurringToggleContent}>
                 <Text style={styles.recurringToggleText}>Recurring Task</Text>
-                <View style={[styles.toggle, newTask.recurring && styles.toggleActive]}>
-                  <View style={[styles.toggleKnob, newTask.recurring && styles.toggleKnobActive]} />
+                <View style={[styles.toggle, newTask.is_recurring && styles.toggleActive]}>
+                  <View style={[styles.toggleKnob, newTask.is_recurring && styles.toggleKnobActive]} />
                 </View>
               </View>
               <Text style={styles.recurringHelp}>
@@ -499,5 +647,38 @@ const styles = StyleSheet.create({
   recurringHelp: {
     fontSize: 14,
     color: Colors.textSecondary,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  pickerContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  pickerOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  pickerOptionSelected: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  pickerOptionText: {
+    fontSize: 14,
+    color: Colors.text,
+  },
+  pickerOptionTextSelected: {
+    color: Colors.white,
   },
 });

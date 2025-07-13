@@ -59,22 +59,24 @@ export default function PigpensScreen() {
 
       if (error) throw error;
 
-      const formattedPigpens: PigpenData[] = data?.map(pigpen => {
+      const formattedPigpens: PigpenData[] = (data || []).map(pigpen => {
         const sensor = pigpen.sensor_nodes?.[0];
-        const latestReading = sensor?.sensor_readings?.[0];
+        const latestReading = sensor?.sensor_readings?.sort((a: any, b: any) => 
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        )?.[0];
         
         return {
           pigpen_id: pigpen.pigpen_id,
           name: pigpen.name,
           location_description: pigpen.location_description,
           sensorId: sensor?.node_label || 'No sensor',
-          ammonia: latestReading?.value_ppm || 0,
+          ammonia: Number(latestReading?.value_ppm) || 0,
           category: latestReading?.category || 'Low',
           battery: sensor?.battery_level || 0,
           status: sensor?.status || 'offline',
           lastReading: latestReading?.timestamp ? formatTime(latestReading.timestamp) : 'No data'
         };
-      }) || [];
+      });
 
       setPigpens(formattedPigpens);
     } catch (error) {
@@ -91,6 +93,7 @@ export default function PigpensScreen() {
   );
 
   const handleAddPigpen = () => {
+    const handleAddPigpen = async () => {
     if (!newPigpen.name || !newPigpen.location_description) {
       Alert.alert('Error', 'Please fill in all required fields');
       return;

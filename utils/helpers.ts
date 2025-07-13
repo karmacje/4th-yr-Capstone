@@ -44,6 +44,21 @@ export const formatTime = (date: string): string => {
   });
 };
 
+export const formatTimeAgo = (date: string): string => {
+  const now = new Date();
+  const past = new Date(date);
+  const diffInMinutes = Math.floor((now.getTime() - past.getTime()) / (1000 * 60));
+  
+  if (diffInMinutes < 1) return 'Just now';
+  if (diffInMinutes < 60) return `${diffInMinutes} min ago`;
+  
+  const diffInHours = Math.floor(diffInMinutes / 60);
+  if (diffInHours < 24) return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+  
+  const diffInDays = Math.floor(diffInHours / 24);
+  return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
+};
+
 export const formatDateTime = (date: string): string => {
   return new Date(date).toLocaleString('en-US', {
     year: 'numeric',

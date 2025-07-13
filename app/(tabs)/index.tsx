@@ -123,24 +123,27 @@ export default function DashboardScreen() {
             )
           )
         `)
+        .order('created_at', { ascending: true });
         .order('created_at', { ascending: false })
         .limit(5);
 
       if (error) throw error;
 
-      const formattedAlerts: AlertData[] = data?.map(alert => {
+      const formattedAlerts: AlertData[] = (data || []).map(alert => {
         const reading = alert.sensor_readings;
-        const pigpenName = reading?.sensor_nodes?.pigpens?.name || 'Unknown';
+        const pigpenName = (reading as any)?.sensor_nodes?.pigpens?.name || 'Unknown';
         const category = reading?.category || 'Unknown';
-        const ppm = reading?.value_ppm || 0;
+        const ppm = Number(reading?.value_ppm) || 0;
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        )?.[0];
         
         return {
           alert_id: alert.alert_id,
           message: `${category} ammonia level (${ppm} ppm) in ${pigpenName}`,
-          time: formatTime(alert.created_at),
+          ammonia: Number(latestReading?.value_ppm) || 0,
           severity: category === 'Critical' ? 'critical' : 'warning'
         };
-      }) || [];
+      });
 
       setAlerts(formattedAlerts);
     } catch (error) {
@@ -162,12 +165,12 @@ export default function DashboardScreen() {
 
       if (error) throw error;
 
-      const formattedSchedules: ScheduleData[] = data?.map(schedule => ({
+      const formattedSchedules: ScheduleData[] = (data || []).map(schedule => ({
         schedule_id: schedule.schedule_id,
         title: schedule.title,
         time: formatTime(schedule.due_date),
         status: schedule.completed ? 'completed' : 'due'
-      })) || [];
+      }));
 
       setSchedules(formattedSchedules);
     } catch (error) {

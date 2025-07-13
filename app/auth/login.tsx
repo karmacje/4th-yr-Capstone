@@ -28,7 +28,8 @@ export default function LoginScreen() {
       if (error) {
         Alert.alert('Login Error', error.message);
       } else {
-        router.replace('/(tabs)');
+        // Navigation will be handled by auth state change listener
+        // No need to manually navigate here
       }
     } catch (error) {
       Alert.alert('Error', 'An unexpected error occurred');

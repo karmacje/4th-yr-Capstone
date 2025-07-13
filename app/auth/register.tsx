@@ -51,8 +51,8 @@ export default function RegisterScreen() {
       } else {
         Alert.alert(
           'Success',
-          'Registration successful! Please check your email to verify your account.',
-          [{ text: 'OK', onPress: () => router.push('/auth/login') }]
+          'Registration successful! You can now sign in.',
+          [{ text: 'OK', onPress: () => router.replace('/auth/login') }]
         );
       }
     } catch (error) {

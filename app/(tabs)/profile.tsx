@@ -41,7 +41,7 @@ export default function ProfileScreen() {
           style: 'destructive',
           onPress: async () => {
             await supabase.auth.signOut();
-            router.replace('/welcome');
+            // Navigation will be handled by auth state change listener
           },
         },
       ]
